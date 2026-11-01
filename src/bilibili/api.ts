@@ -50,8 +50,10 @@ export class BilibiliClient {
 		return parts.join('; ');
 	}
 
-	private async getJson(url: string, opts?: { skipBuvid?: boolean }): Promise<BiliJson> {
-		// B站风控：Chrome UA+Referer 但无 buvid3 cookie 会吃 412，任何 API 请求前先懒引导一次 buvid
+	private async getJsonRaw(
+		url: string,
+		opts?: { skipBuvid?: boolean },
+	): Promise<{ json: BiliJson; headers: Record<string, string> }> {
 		if (!opts?.skipBuvid && !this.creds().buvid3) await this.ensureBuvidOnce();
 		const headers: Record<string, string> = {};
 		const ck = this.cookieHeader();
@@ -59,10 +61,14 @@ export class BilibiliClient {
 		const resp = await this.transport.get(url, headers);
 		if (resp.status >= 400) throw new Error(`HTTP ${resp.status}（${new URL(url).host}）`);
 		try {
-			return JSON.parse(resp.text) as BiliJson;
+			return { json: JSON.parse(resp.text) as BiliJson, headers: resp.headers ?? {} };
 		} catch {
 			throw new Error('接口返回非 JSON（可能是风控页），稍后重试');
 		}
+	}
+
+	private async getJson(url: string, opts?: { skipBuvid?: boolean }): Promise<BiliJson> {
+		return (await this.getJsonRaw(url, opts)).json;
 	}
 
 	private assert(json: BiliJson, what: string): any {
@@ -197,20 +203,40 @@ export class BilibiliClient {
 	}
 
 	async qrPoll(qrcodeKey: string): Promise<QrPoll> {
-		const json = await this.getJson(
+		const { json, headers } = await this.getJsonRaw(
 			`https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=${encodeURIComponent(qrcodeKey)}`,
+			{ skipBuvid: true },
 		);
 		if (json.code !== 0) throw new Error(`登录轮询失败 code=${json.code}`);
 		const data = json.data ?? {};
-		if (data.code === 0 && typeof data.url === 'string') {
-			const usp = new URLSearchParams(data.url.split('?')[1] ?? '');
+		if (data.code === 0) {
+			// SESSDATA 的权威来源是 Set-Cookie 响应头；url query 与 cookie_info 作补充。
+			// 注意：SESSDATA 必须保持原始百分号编码形态（浏览器原样存原样发），不能解码成逗号形态。
+			const params: Record<string, string> = {};
+			harvestFromSetCookie(headers['set-cookie'], params);
+			harvestFromUrlQuery(typeof data.url === 'string' ? data.url : '', params);
+			const ci = data.cookie_info?.cookies;
+			if (Array.isArray(ci)) {
+				for (const c of ci) {
+					if (c?.name && c?.value && params[c.name] === undefined) params[c.name] = String(c.value);
+				}
+			}
+			const sessdata = params['SESSDATA'] ?? '';
+			if (!sessdata) {
+				return {
+					code: -2,
+					message: `登录成功但未提取到 SESSDATA（url参数:[${Object.keys(params).join(', ')}]，set-cookie:${
+						headers['set-cookie'] ? '有' : '无'
+					}）`,
+				};
+			}
 			return {
 				code: 0,
 				message: '',
 				cookies: {
-					sessdata: usp.get('SESSDATA') ?? '',
-					biliJct: usp.get('bili_jct') ?? '',
-					dedeuserid: usp.get('DedeUserID') ?? '',
+					sessdata,
+					biliJct: params['bili_jct'] ?? '',
+					dedeuserid: params['DedeUserID'] ?? '',
 				},
 			};
 		}
@@ -233,4 +259,33 @@ function mapStream(s: any): DashStream {
 		baseUrl: s.base_url ?? s.baseUrl ?? '',
 		backupUrls: (s.backup_url ?? s.backupUrl ?? []) as string[],
 	};
+}
+
+/** 从 set-cookie 提取登录 cookie（多条已用 \n 拼接；也兼容被合并成 ", name=" 的形式） */
+function harvestFromSetCookie(setCookie: string | undefined, out: Record<string, string>): void {
+	if (!setCookie) return;
+	const parts = setCookie.split(/\n|,(?=[A-Za-z0-9_]+=)/);
+	for (const part of parts) {
+		const m = part.trim().match(/^([A-Za-z0-9_]+)=([^;]*)/);
+		if (!m) continue;
+		const [, name, value] = m;
+		if (name === 'SESSDATA' || name === 'bili_jct' || name === 'DedeUserID') {
+			if (value && out[name] === undefined) out[name] = value;
+		}
+	}
+}
+
+/** 从回跳 URL 的 raw query 提取（不做 URL 解码，保持原样） */
+function harvestFromUrlQuery(url: string, out: Record<string, string>): void {
+	const rawQuery = url.split('?')[1] ?? '';
+	if (!rawQuery) return;
+	for (const pair of rawQuery.split('&')) {
+		const eq = pair.indexOf('=');
+		if (eq <= 0) continue;
+		const name = pair.slice(0, eq);
+		if (name === 'SESSDATA' || name === 'bili_jct' || name === 'DedeUserID') {
+			const value = pair.slice(eq + 1);
+			if (value && out[name] === undefined) out[name] = value;
+		}
+	}
 }

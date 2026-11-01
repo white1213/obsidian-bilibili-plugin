@@ -32,6 +32,15 @@ export const obsidianTransport: HttpTransport = {
 			throw: false,
 			headers: { ...BROWSER_HEADERS, ...headers },
 		});
-		return { status: resp.status, data: resp.arrayBuffer, text: resp.text };
+		// 归一化 set-cookie：Obsidian headers 里可能是数组或字符串
+		const h: Record<string, string> = {};
+		const raw = resp.headers as Record<string, unknown> | undefined;
+		if (raw) {
+			for (const [k, v] of Object.entries(raw)) {
+				if (Array.isArray(v)) h[k.toLowerCase()] = v.join('\n');
+				else if (typeof v === 'string') h[k.toLowerCase()] = v;
+			}
+		}
+		return { status: resp.status, data: resp.arrayBuffer, text: resp.text, headers: h };
 	},
 };

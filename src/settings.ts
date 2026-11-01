@@ -38,16 +38,16 @@ export class BilibiliSettingTab extends PluginSettingTab {
 		this.plugin.api
 			.getUsername()
 			.then((n) => statusSpan.setText(n ? `已登录：${n}` : '未登录'))
-			.catch(() => statusSpan.setText('状态获取失败'));
+			.catch((e) => statusSpan.setText('状态获取失败：' + (e instanceof Error ? e.message : String(e))));
 		loginSetting.addButton((b) =>
 			b.setButtonText('扫码登录').onClick(() => {
-				new QrLoginModal(this.app, this.plugin).open();
+				new QrLoginModal(this.app, this.plugin, () => this.display()).open();
 			}),
 		);
 
 		new Setting(containerEl)
 			.setName('手动粘贴 SESSDATA（兜底）')
-			.setDesc('扫码不可用时，从浏览器 F12 → Application → Cookies → bilibili.com 复制 SESSDATA 的值')
+			.setDesc('从浏览器 F12 → Application → Cookies → bilibili.com 复制 SESSDATA 的原始值（保持 %2C 编码，不要手动解码）')
 			.addText((t) => {
 				t.inputEl.type = 'password';
 				t.setValue(this.plugin.settings.sessdata).onChange(async (v) => {
@@ -76,7 +76,11 @@ class QrLoginModal extends Modal {
 	private timer = 0;
 	private closed = false;
 
-	constructor(app: App, private plugin: BilibiliPlugin) {
+	constructor(
+		app: App,
+		private plugin: BilibiliPlugin,
+		private onSuccess?: () => void,
+	) {
 		super(app);
 	}
 
@@ -108,16 +112,30 @@ class QrLoginModal extends Modal {
 							await this.plugin.api.ensureBuvid();
 						} catch {}
 						await this.plugin.saveSettings();
-						status.setText('✅ 登录成功');
-						new Notice('B站登录成功');
-						setTimeout(() => {
-							if (!this.closed) this.close();
-						}, 800);
+						// 立刻用新 Cookie 验证登录态，把问题暴露在弹窗里而不是让用户猜
+						let uname = '';
+						try {
+							uname = await this.plugin.api.getUsername();
+						} catch (e) {
+							status.setText('⚠️ Cookie 已保存，但B站校验未通过：' + (e instanceof Error ? e.message : String(e)));
+							this.onSuccess?.();
+							return;
+						}
+						status.setText(uname ? `✅ 登录成功：${uname}` : '⚠️ Cookie 已保存但B站返回未登录，请重试');
+						new Notice(uname ? `B站登录成功：${uname}` : 'Cookie 已保存但未通过校验，请重试');
+						this.onSuccess?.();
+						if (uname) {
+							setTimeout(() => {
+								if (!this.closed) this.close();
+							}, 900);
+						}
 					} else if (r.code === 86090) {
 						status.setText('已扫码，请在手机上确认…');
 					} else if (r.code === 86038) {
 						this.stop();
 						status.setText('二维码已过期，请关闭后重新打开');
+					} else if (r.code !== 86101) {
+						status.setText(`登录状态 ${r.code}：${r.message || '未知'}`);
 					}
 				} catch {
 					// 网络抖动忽略，下轮再试

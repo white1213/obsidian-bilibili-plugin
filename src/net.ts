@@ -3,6 +3,8 @@ export interface TransportResponse {
 	status: number;
 	data: ArrayBuffer;
 	text: string;
+	/** 响应头；set-cookie 多条时用 \n 拼接存放在 'set-cookie' 键 */
+	headers?: Record<string, string>;
 }
 
 export interface HttpTransport {

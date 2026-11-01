@@ -40,7 +40,11 @@ const transport: HttpTransport = {
 			},
 		});
 		const buf = await r.arrayBuffer();
-		return { status: r.status, data: buf, text: new TextDecoder().decode(buf) };
+		const respHeaders: Record<string, string> = {};
+		r.headers.forEach((v, k) => (respHeaders[k.toLowerCase()] = v));
+		const sc = r.headers.getSetCookie?.() ?? [];
+		if (sc.length) respHeaders['set-cookie'] = sc.join('\n');
+		return { status: r.status, data: buf, text: new TextDecoder().decode(buf), headers: respHeaders };
 	},
 };
 
