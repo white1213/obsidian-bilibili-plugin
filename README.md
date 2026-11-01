@@ -5,7 +5,7 @@
 ## 安装（BRAT）
 
 1. 先安装 [BRAT](https://github.com/TfTHacker/obsidian42-brat) 插件
-2. BRAT → Add Beta Plugin → 输入 `white1213/obsidian插件`
+2. BRAT → Add Beta Plugin → 输入 `white1213/obsidian-bilibili-plugin`
 3. 启用 Bilibili Player，设置里扫码登录后使用
 
 ## 功能
