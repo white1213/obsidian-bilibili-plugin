@@ -206,9 +206,35 @@ class PlayerCard {
 		const status = box.createDiv({ cls: 'bili-embed-status', text: '获取播放地址…' });
 		const bar = box.createDiv({ cls: 'bili-embed-bar' });
 		const fsBtn = bar.createEl('button', { text: '⤢ 放大' });
-		fsBtn.onclick = () => {
+		// 假全屏下：竖屏视口 + 横屏视频 → CSS 旋转 90° 模拟横屏（安卓 webview 原生全屏不可用时的兜底）
+		const updateLandscape = (): void => {
+			if (!this.wrap.isConnected) {
+				window.removeEventListener('resize', updateLandscape);
+				return;
+			}
+			const portrait = window.innerHeight > window.innerWidth;
+			const landscapeVideo = video.videoWidth > video.videoHeight;
+			this.wrap.classList.toggle(
+				'bili-embed-landscape',
+				this.wrap.hasClass('bili-embed-fullscreen') && landscapeVideo && portrait,
+			);
+		};
+		fsBtn.onclick = async () => {
+			// 原生全屏优先：桌面体验最好，安卓支持时系统会自动转横屏
+			if (!this.wrap.hasClass('bili-embed-fullscreen') && typeof video.requestFullscreen === 'function') {
+				try {
+					await video.requestFullscreen();
+					return;
+				} catch {
+					// Capacitor webview 可能不支持 → 走 CSS 假全屏
+				}
+			}
 			this.wrap.classList.toggle('bili-embed-fullscreen');
-			fsBtn.setText(this.wrap.hasClass('bili-embed-fullscreen') ? '⤡ 还原' : '⤢ 放大');
+			const fs = this.wrap.hasClass('bili-embed-fullscreen');
+			if (fs) window.addEventListener('resize', updateLandscape);
+			else window.removeEventListener('resize', updateLandscape);
+			updateLandscape();
+			fsBtn.setText(fs ? '⤡ 还原' : '⤢ 放大');
 		};
 		const tsBtn = bar.createEl('button', { text: '⧗ 复制时间戳' });
 		tsBtn.onclick = async () => {

@@ -50,20 +50,33 @@ function appendBufferAsync(sb: SourceBuffer, data: ArrayBuffer): Promise<void> {
 	});
 }
 
+function waitSbReady(sb: SourceBuffer): Promise<void> {
+	let guard = 0;
+	const loop = (): Promise<void> => {
+		if (!sb.updating) return Promise.resolve();
+		if (++guard > 200) return Promise.reject(new Error('SourceBuffer 更新超时'));
+		return onceEvent(sb, 'updateend', 5000).then(loop);
+	};
+	return loop();
+}
+
 function removeAsync(sb: SourceBuffer, start: number, end: number): Promise<void> {
-	return new Promise((resolve, reject) => {
-		const onEnd = () => {
-			sb.removeEventListener('updateend', onEnd);
-			resolve();
-		};
-		sb.addEventListener('updateend', onEnd);
-		try {
-			sb.remove(start, end);
-		} catch (e) {
-			sb.removeEventListener('updateend', onEnd);
-			reject(e instanceof Error ? e : new Error(String(e)));
-		}
-	});
+	return waitSbReady(sb).then(
+		() =>
+			new Promise<void>((resolve, reject) => {
+				const onEnd = () => {
+					sb.removeEventListener('updateend', onEnd);
+					resolve();
+				};
+				sb.addEventListener('updateend', onEnd);
+				try {
+					sb.remove(start, end);
+				} catch (e) {
+					sb.removeEventListener('updateend', onEnd);
+					reject(e instanceof Error ? e : new Error(String(e)));
+				}
+			}),
+	);
 }
 
 function onceEvent(target: EventTarget, ev: string, timeoutMs = 15000): Promise<void> {
@@ -136,6 +149,8 @@ class TrackLoader {
 	exhausted = false;
 	gotFirst = false;
 	onFatal?: (err: Error) => void;
+	/** 调试用：暴露内部状态 */
+	readonly debug: { sb: SourceBuffer; next: () => number; fragCount: () => number; fragTimeOf: (i: number) => number };
 
 	private frags: Frag[] | null;
 	private next = 0;
@@ -153,6 +168,12 @@ class TrackLoader {
 	) {
 		this.frags = head.frags;
 		this.cursor = head.cursorAfterInit;
+		this.debug = {
+			sb,
+			next: () => this.next,
+			fragCount: () => this.frags?.length ?? 0,
+			fragTimeOf: (i: number) => this.frags?.[i]?.time ?? -1,
+		};
 	}
 
 	static async create(
@@ -258,6 +279,8 @@ class TrackLoader {
 				await sleep(600 * retries);
 				continue;
 			}
+			// seek 可能发生在下载途中：过期的分块必须丢弃，绝不能在 clearFrom 之后追加
+			if (this.stopped || myToken !== this.token) return false;
 			if (data.byteLength === 0) {
 				this.exhausted = true;
 				return false;
@@ -278,10 +301,22 @@ class TrackLoader {
 		return 0;
 	}
 
-	private timeBuffered(t: number): boolean {
+	/** t 是否落在已缓冲数据里（范围起止 ±0.05s 容差） */
+	timeBuffered(t: number): boolean {
 		const b = this.sb.buffered;
 		for (let i = 0; i < b.length; i++) {
 			if (b.start(i) - 0.05 <= t && t <= b.end(i) + 0.05) return true;
+		}
+		return false;
+	}
+
+	/** t 是否恰好压在某个分片的起始边界上：Chromium 对「seek 到刚重拉完的缓冲区起点」
+	 *  存在 seek 永不完成的怪癖（数据就位但 readyState 卡 1），需挪过边界规避 */
+	onExactFragBoundary(t: number): boolean {
+		if (!this.frags) return false;
+		for (const f of this.frags) {
+			if (f.time > t + 1) break;
+			if (Math.abs(f.time - t) < 0.015) return true;
 		}
 		return false;
 	}
@@ -294,11 +329,10 @@ class TrackLoader {
 		}
 	}
 
-	/** 清除 fromTime 之后的所有已缓冲数据：seek 续拉时避免追加重叠段 */
+	/** 清除 fromTime 之后的所有已缓冲数据：seek 续拉时避免追加重叠段。
+	 *  注意：绝不能调 SourceBuffer.abort()——它会重置 fMP4 解析器，若在途分块随后追加
+	 *  会在 currentTime 处留下永久空洞（表现为拖进度条后无限转圈） */
 	private async clearFrom(fromTime: number): Promise<void> {
-		try {
-			this.sb.abort();
-		} catch {}
 		const b = this.sb.buffered;
 		for (let i = b.length - 1; i >= 0; i--) {
 			if (b.end(i) > fromTime + 0.05) {
@@ -364,6 +398,7 @@ export class DashPlayer {
 			]);
 			lv.onFatal = la.onFatal = (err) => o.onFatal?.(err);
 			this.loaders = [lv, la];
+			(window as any).__biliLastPlayer = this;
 			if (o.duration && Number.isFinite(o.duration) && o.duration > 0) {
 				try {
 					ms.duration = o.duration;
@@ -374,7 +409,12 @@ export class DashPlayer {
 			void la.pump();
 			const v = o.videoEl;
 			v.addEventListener('seeking', () => {
-				for (const l of this.loaders) l.seek(v.currentTime);
+				const t = v.currentTime;
+				for (const l of this.loaders) l.seek(t);
+				// 目标压分片边界且需要重拉 → 挪过边界 50ms，规避 Chromium seek 卡死
+				if (this.loaders[0] && !this.loaders[0].timeBuffered(t) && this.loaders[0].onExactFragBoundary(t)) {
+					v.currentTime = t + 0.05;
+				}
 			});
 			v.addEventListener('waiting', () => {
 				for (const l of this.loaders) l.pump();
@@ -383,9 +423,37 @@ export class DashPlayer {
 				for (const l of this.loaders) void l.pump();
 				this.checkEnd();
 				this.maybeStart();
+				this.stallWatchdog();
 			}, 500);
 		} catch (e) {
 			o.onFatal?.(e instanceof Error ? e : new Error(String(e)));
+		}
+	}
+
+	private lastStall = { t: -1, since: 0 };
+
+	/** 卡死看门狗：播放中 currentTime 停滞超 4 秒 → 强制对两条轨重定位当前时刻续拉，
+	 *  自愈 seek 竞态或索引偏差造成的缓冲空洞（拖进度条无限转圈的兜底）。
+	 *  注意不能跳过 v.seeking 状态——无限转圈恰恰是 seeking=true 卡住 */
+	private stallWatchdog(): void {
+		const v = this.opts.videoEl;
+		if (v.paused || v.ended || v.readyState >= 3 || !this.started) {
+			this.lastStall = { t: -1, since: 0 };
+			return;
+		}
+		const now = Date.now();
+		if (Math.abs(v.currentTime - this.lastStall.t) > 0.01) {
+			this.lastStall = { t: v.currentTime, since: now };
+			return;
+		}
+		if (now - this.lastStall.since > 4000) {
+			this.lastStall.since = now;
+			const t = v.currentTime;
+			for (const l of this.loaders) l.seek(t);
+			// 卡在分片边界上（数据已就位但 seek 不完成）→ 挪过边界
+			if (v.currentTime === t && this.loaders[0].onExactFragBoundary(t)) {
+				v.currentTime = t + 0.05;
+			}
 		}
 	}
 
