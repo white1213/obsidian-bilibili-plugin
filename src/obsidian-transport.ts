@@ -41,6 +41,9 @@ export const obsidianTransport: HttpTransport = {
 				else if (typeof v === 'string') h[k.toLowerCase()] = v;
 			}
 		}
-		return { status: resp.status, data: resp.arrayBuffer, text: resp.text, headers: h };
+		// 兼容不同 Obsidian 版本：arrayBuffer 在部分实现里是 Promise
+		const ab = resp.arrayBuffer;
+		const data = ab instanceof ArrayBuffer ? ab : await (ab as unknown as Promise<ArrayBuffer>);
+		return { status: resp.status, data, text: resp.text, headers: h };
 	},
 };

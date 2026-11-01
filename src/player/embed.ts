@@ -38,7 +38,7 @@ async function mountCard(plugin: BilibiliPlugin, anchor: HTMLElement, link: Bili
 			if (r.p && r.p > 1) link.p = r.p;
 		} catch (e) {
 			console.warn('[bilibili-embed] 短链解析失败', e);
-			fallbackIframe(wrap, link);
+			new PlayerCard(plugin, wrap, link, null, null).fail(e);
 			return;
 		}
 	}
@@ -62,7 +62,7 @@ async function mountCard(plugin: BilibiliPlugin, anchor: HTMLElement, link: Bili
 		info = await plugin.api.getView({ bvid: link.bvid });
 	} catch (e) {
 		console.warn('[bilibili-embed] 获取视频信息失败', e);
-		fallbackIframe(wrap, link);
+		new PlayerCard(plugin, wrap, link, null, null).fail(e);
 		return;
 	}
 	const page: VideoPage = info.pages.find((p) => p.page === link.p) ?? info.pages[0];
@@ -70,27 +70,59 @@ async function mountCard(plugin: BilibiliPlugin, anchor: HTMLElement, link: Bili
 }
 
 class PlayerCard {
+	private failed = false;
 	constructor(
 		private plugin: BilibiliPlugin,
 		private wrap: HTMLElement,
 		private link: BiliLink,
-		private info: VideoInfo,
-		private page: VideoPage,
+		private info: VideoInfo | null,
+		private page: VideoPage | null,
 	) {}
 
+	/** 流式播放失败：展示错误信息 + 官方 iframe 兜底 + 重试按钮（不再静默降级） */
+	fail(err: unknown): void {
+		if (this.failed) return;
+		this.failed = true;
+		const msg = err instanceof Error ? err.message : String(err);
+		console.error('[bilibili-embed] 流式播放失败，降级到官方播放器：', msg);
+		this.wrap.empty();
+		const box = this.wrap.createDiv({ cls: 'bili-embed-player' });
+		const iframe = box.createEl('iframe', { cls: 'bili-embed-iframe' });
+		const q = new URLSearchParams({
+			bvid: this.link.bvid ?? '',
+			page: String(this.link.p || 1),
+			autoplay: '0',
+			danmaku: '0',
+			high_quality: '1',
+		});
+		iframe.src = `https://player.bilibili.com/player.html?${q.toString()}`;
+		iframe.setAttribute('scrolling', 'no');
+		iframe.setAttribute('allowfullscreen', 'true');
+		const bar = box.createDiv({ cls: 'bili-embed-fallback' });
+		bar.createSpan({ text: `⚠️ 流式播放失败：${msg} · 已用官方播放器兜底（通常仅480p）` });
+		const retry = bar.createEl('button', { text: '重试流式' });
+		retry.onclick = () => {
+			this.failed = false;
+			void this.start();
+		};
+	}
+
 	renderCover(): void {
+		const info = this.info;
+		const page = this.page;
+		if (!info || !page) return;
 		this.wrap.empty();
 		const card = this.wrap.createDiv({ cls: 'bili-embed-card' });
-		if (this.info.pic) {
+		if (info.pic) {
 			const img = card.createEl('img', { cls: 'bili-embed-cover' });
-			img.src = this.info.pic;
+			img.src = info.pic;
 			img.onerror = () => img.remove();
 		}
 		card.createDiv({ cls: 'bili-embed-shade' });
 		const meta = card.createDiv({ cls: 'bili-embed-meta' });
-		meta.createDiv({ cls: 'bili-embed-title', text: this.info.title || this.info.bvid });
-		const subBits = [this.info.up, fmtTime(this.info.duration || this.page.duration)];
-		if (this.link.p > 1) subBits.push(`P${this.link.p} ${this.page.part}`);
+		meta.createDiv({ cls: 'bili-embed-title', text: info.title || info.bvid });
+		const subBits = [info.up, fmtTime(info.duration || page.duration)];
+		if (this.link.p > 1) subBits.push(`P${this.link.p} ${page.part}`);
 		if (this.link.t) subBits.push(`从 ${fmtTime(this.link.t)} 开始`);
 		meta.createDiv({ cls: 'bili-embed-sub', text: subBits.join(' · ') });
 		const playBtn = card.createEl('button', { cls: 'bili-embed-play', text: '▶' });
@@ -102,10 +134,23 @@ class PlayerCard {
 	}
 
 	private linkUrl(): string {
-		return `https://www.bilibili.com/video/${this.info.bvid}${this.link.p > 1 ? `?p=${this.link.p}` : ''}`;
+		const bvid = this.info?.bvid ?? this.link.bvid ?? '';
+		return `https://www.bilibili.com/video/${bvid}${this.link.p > 1 ? `?p=${this.link.p}` : ''}`;
 	}
 
 	private async start(): Promise<void> {
+		if (!this.info || !this.page) {
+			try {
+				this.info = await this.plugin.api.getView({ bvid: this.link.bvid });
+				this.page = this.info.pages.find((p) => p.page === this.link.p) ?? this.info.pages[0];
+			} catch (e) {
+				this.fail(e);
+				return;
+			}
+		}
+		const info = this.info;
+		const page = this.page;
+		if (!info || !page) return;
 		this.wrap.empty();
 		const box = this.wrap.createDiv({ cls: 'bili-embed-player' });
 		const video = box.createEl('video', { cls: 'bili-embed-video' });
@@ -133,11 +178,11 @@ class PlayerCard {
 				} catch {}
 			},
 		};
-		this.plugin.playersByBvid.set(this.info.bvid, ref);
+		this.plugin.playersByBvid.set(info.bvid, ref);
 
 		let player: DashPlayer | null = null;
 		try {
-			const dash = await this.plugin.api.getDash(this.info.bvid, this.page.cid, this.plugin.settings.quality);
+			const dash = await this.plugin.api.getDash(info.bvid, page.cid, this.plugin.settings.quality);
 			const pick = this.plugin.api.pickStreams(dash, this.plugin.settings.quality);
 			status.setText('连接媒体源…');
 			player = await DashPlayer.create({
@@ -154,17 +199,15 @@ class PlayerCard {
 					else status.remove();
 				},
 				onFatal: (err) => {
-					console.error('[bilibili-embed] MSE 播放失败', err);
 					ref.destroyed = true;
 					player?.destroy();
-					fallbackIframe(this.wrap, this.link);
+					this.fail(err);
 				},
 			});
 			ref.destroy = () => player?.destroy();
 		} catch (e) {
-			console.error('[bilibili-embed] 启动播放失败', e);
 			ref.destroyed = true;
-			fallbackIframe(this.wrap, this.link);
+			this.fail(e);
 		}
 	}
 }
