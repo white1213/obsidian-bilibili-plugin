@@ -2,6 +2,12 @@
 
 在 Obsidian 笔记里内嵌播放 B站视频：**扫码登录后 1080p 流式播放**（MSE + sidx 分片拉流，无本地缓存），支持时间戳⇄笔记联动。桌面 + 安卓（BRAT 安装）。
 
+## 安装（BRAT）
+
+1. 先安装 [BRAT](https://github.com/TfTHacker/obsidian42-brat) 插件
+2. BRAT → Add Beta Plugin → 输入 `white1213/obsidian插件`
+3. 启用 Bilibili Player，设置里扫码登录后使用
+
 ## 功能
 
 - 阅读视图里自动识别 B站链接（`bilibili.com/video/BVxx`、`b23.tv` 短链、裸 BV 号、`?p=` 分P），替换为封面卡片，点 ▶ 播放
