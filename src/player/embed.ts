@@ -1,4 +1,4 @@
-import { Notice, Platform } from 'obsidian';
+import { Notice } from 'obsidian';
 import type BilibiliPlugin from '../main';
 import { BiliLink, parseBiliUrl } from '../bilibili/url';
 import { VideoInfo, VideoPage } from '../bilibili/types';
@@ -249,9 +249,8 @@ class PlayerCard {
 		};
 		video.addEventListener('loadedmetadata', updateLandscape);
 		fsBtn.onclick = async () => {
-			// 桌面走原生全屏；手机弃用原生全屏（Capacitor 自定义视图吃不住方向锁，
-			// 且用户需手开系统旋转开关），直接 CSS 假全屏 + 旋转，行为完全可控
-			if (!Platform.isMobile && !this.wrap.hasClass('bili-embed-fullscreen') && typeof video.requestFullscreen === 'function') {
+			// 原生全屏优先（含手机，用户实测此路径旋转正常）；不支持再走 CSS 假全屏兜底
+			if (!this.wrap.hasClass('bili-embed-fullscreen') && typeof video.requestFullscreen === 'function') {
 				try {
 					await video.requestFullscreen();
 					tryLockLandscape(video);
