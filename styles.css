@@ -169,10 +169,8 @@
 	border-radius: 0;
 }
 
-/* 假全屏 + 竖屏视口 + 横屏视频：旋转 90° 模拟横屏（用户把手机横过来拿） */
+/* 假全屏 + 竖屏视口 + 横屏视频：旋转 90° 模拟横屏（尺寸由 JS 按视频比例精确计算） */
 .bili-embed-fullscreen.bili-embed-landscape .bili-embed-player {
-	width: 100vh;
-	height: 100vw;
 	transform: rotate(90deg);
 	aspect-ratio: auto;
 	border-radius: 0;

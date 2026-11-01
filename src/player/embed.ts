@@ -223,7 +223,9 @@ class PlayerCard {
 		const status = box.createDiv({ cls: 'bili-embed-status', text: '获取播放地址…' });
 		const bar = box.createDiv({ cls: 'bili-embed-bar' });
 		const fsBtn = bar.createEl('button', { text: '⤢ 放大' });
-		// 假全屏下：竖屏视口 + 横屏视频 → CSS 旋转 90° 模拟横屏（安卓 webview 原生全屏不可用时的兜底）
+		// 假全屏下：竖屏视口 + 横屏视频 → CSS 旋转 90° 模拟横屏（安卓 webview 原生全屏不可用时的兜底）。
+		// 尺寸用 JS 按视频真实宽高比精确计算（vh/vw 在 webview 里不可靠）：盒比例=视频比例，
+		// 盒宽=min(视口高, 视口宽×视频比) → 旋转后取不变形前提下的最大铺满面积
 		const updateLandscape = (): void => {
 			if (!this.wrap.isConnected) {
 				window.removeEventListener('resize', updateLandscape);
@@ -231,11 +233,21 @@ class PlayerCard {
 			}
 			const portrait = window.innerHeight > window.innerWidth;
 			const landscapeVideo = video.videoWidth > video.videoHeight;
-			this.wrap.classList.toggle(
-				'bili-embed-landscape',
-				this.wrap.hasClass('bili-embed-fullscreen') && landscapeVideo && portrait,
-			);
+			const active = this.wrap.hasClass('bili-embed-fullscreen') && landscapeVideo && portrait;
+			this.wrap.classList.toggle('bili-embed-landscape', active);
+			if (active) {
+				const vw = window.innerWidth;
+				const vh = window.innerHeight;
+				const ar = video.videoWidth / video.videoHeight;
+				const boxW = Math.min(vh, vw * ar);
+				box.style.width = `${Math.round(boxW)}px`;
+				box.style.height = `${Math.round(boxW / ar)}px`;
+			} else {
+				box.style.width = '';
+				box.style.height = '';
+			}
 		};
+		video.addEventListener('loadedmetadata', updateLandscape);
 		fsBtn.onclick = async () => {
 			// 桌面走原生全屏；手机弃用原生全屏（Capacitor 自定义视图吃不住方向锁，
 			// 且用户需手开系统旋转开关），直接 CSS 假全屏 + 旋转，行为完全可控
