@@ -1,8 +1,9 @@
-import { Plugin } from 'obsidian';
+import { Plugin, requestUrl } from 'obsidian';
 import { BilibiliClient } from './bilibili/api';
 import { obsidianTransport } from './obsidian-transport';
 import { BilibiliSettings, BilibiliSettingTab, DEFAULT_SETTINGS } from './settings';
 import { EmbeddedPlayerRef, mountEmbedProcessor } from './player/embed';
+import { DashPlayer } from './player/dash-stream';
 
 export default class BilibiliPlugin extends Plugin {
 	settings!: BilibiliSettings;
@@ -29,6 +30,8 @@ export default class BilibiliPlugin extends Plugin {
 		);
 		this.addSettingTab(new BilibiliSettingTab(this.app, this));
 		this.registerMarkdownPostProcessor(mountEmbedProcessor(this));
+		// 调试钩子：CDP 控制台可直接驱动传输层与引擎定位问题（自用插件，保留）
+		(window as any).__biliDebug = { transport: obsidianTransport, DashPlayer, api: this.api, requestUrl };
 	}
 
 	onunload(): void {

@@ -6,8 +6,10 @@ export const BILI_UA =
 export const BILI_REFERER = 'https://www.bilibili.com/';
 
 /**
- * B站 WAF 规则：带 Referer 的请求必须配套 Chrome Client Hints（sec-ch-ua/Sec-Fetch/Accept），
- * 否则 412。这里固化一整套浏览器头，API 与 CDN 共用。
+ * B站 WAF 规则：带 Referer 的请求需要配套 Chrome Client Hints（sec-ch-ua/Accept），
+ * 否则 412。注意：绝不能带 Sec-Fetch-* 头——Chromium/Electron 网络栈把它们视为
+ * 浏览器自控头，手动设置会让请求直接 net::ERR_FAILED/ERR_INVALID_ARGUMENT
+ * （实测 Obsidian requestUrl：带→CDN 全挂，不带→API 200/CDN 206）。
  */
 export const BROWSER_HEADERS: Record<string, string> = {
 	'User-Agent': BILI_UA,
@@ -17,9 +19,6 @@ export const BROWSER_HEADERS: Record<string, string> = {
 	'sec-ch-ua': '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
 	'sec-ch-ua-mobile': '?0',
 	'sec-ch-ua-platform': '"Windows"',
-	'Sec-Fetch-Dest': 'empty',
-	'Sec-Fetch-Mode': 'cors',
-	'Sec-Fetch-Site': 'same-site',
 	Origin: 'https://www.bilibili.com',
 };
 

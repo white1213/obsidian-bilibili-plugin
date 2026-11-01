@@ -23,6 +23,21 @@ export function mountEmbedProcessor(plugin: BilibiliPlugin) {
 			anchor.dataset.biliEmbed = '1';
 			void mountCard(plugin, anchor, link);
 		});
+		// 网页剪藏进来的B站官方 iframe 嵌入（player.bilibili.com?bvid=xx）→ 换成我们的登录高清播放卡
+		el.querySelectorAll('iframe').forEach((f) => {
+			const frame = f as HTMLElement;
+			if (frame.dataset.biliEmbed !== undefined) return;
+			if (frame.classList.contains('bili-embed-iframe')) return;
+			const src = f.getAttribute('src') ?? '';
+			const m = src.match(/^https?:\/\/player\.bilibili\.com\/player\.html\?([^"']*)$/i);
+			if (!m) return;
+			const q = new URLSearchParams(m[1].replace(/&amp;/g, '&'));
+			const bvid = q.get('bvid') ?? '';
+			if (!/^BV[0-9A-Za-z]{10}$/.test(bvid)) return;
+			frame.dataset.biliEmbed = '1';
+			const link: BiliLink = { bvid, p: Number(q.get('page') ?? 1) || 1, t: Number(q.get('t') ?? 0) || 0 };
+			void mountCard(plugin, frame, link);
+		});
 	};
 }
 
