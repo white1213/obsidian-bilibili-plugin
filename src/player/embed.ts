@@ -6,6 +6,23 @@ import { DashPlayer } from './dash-stream';
 import { obsidianTransport } from '../obsidian-transport';
 import { copyText, fmtTime } from '../util';
 
+/** 横屏视频进全屏后锁定横屏方向（安卓要求全屏状态才允许 lock），退出时自动解锁 */
+function tryLockLandscape(video: HTMLVideoElement): void {
+	if (!(video.videoWidth > video.videoHeight)) return;
+	const so = screen.orientation as ScreenOrientation & {
+		lock?: (o: string) => Promise<void>;
+		unlock?: () => void;
+	};
+	void so?.lock?.('landscape').catch(() => {});
+}
+
+function unlockOrientation(): void {
+	const so = screen.orientation as ScreenOrientation & { unlock?: () => void };
+	try {
+		so?.unlock?.();
+	} catch {}
+}
+
 export interface EmbeddedPlayerRef {
 	destroyed: boolean;
 	seek(t: number): void;
@@ -220,10 +237,11 @@ class PlayerCard {
 			);
 		};
 		fsBtn.onclick = async () => {
-			// 原生全屏优先：桌面体验最好，安卓支持时系统会自动转横屏
+			// 原生全屏优先：进全屏后锁横屏（免开系统旋转开关）；webview 不支持则走 CSS 假全屏
 			if (!this.wrap.hasClass('bili-embed-fullscreen') && typeof video.requestFullscreen === 'function') {
 				try {
 					await video.requestFullscreen();
+					tryLockLandscape(video);
 					return;
 				} catch {
 					// Capacitor webview 可能不支持 → 走 CSS 假全屏
@@ -231,11 +249,25 @@ class PlayerCard {
 			}
 			this.wrap.classList.toggle('bili-embed-fullscreen');
 			const fs = this.wrap.hasClass('bili-embed-fullscreen');
-			if (fs) window.addEventListener('resize', updateLandscape);
-			else window.removeEventListener('resize', updateLandscape);
+			if (fs) {
+				window.addEventListener('resize', updateLandscape);
+				tryLockLandscape(video);
+			} else {
+				window.removeEventListener('resize', updateLandscape);
+				unlockOrientation();
+			}
 			updateLandscape();
 			fsBtn.setText(fs ? '⤡ 还原' : '⤢ 放大');
 		};
+		// 原生全屏被系统返回键退出时解锁方向
+		const onFsChange = (): void => {
+			if (!this.wrap.isConnected) {
+				document.removeEventListener('fullscreenchange', onFsChange);
+				return;
+			}
+			if (!document.fullscreenElement) unlockOrientation();
+		};
+		document.addEventListener('fullscreenchange', onFsChange);
 		const tsBtn = bar.createEl('button', { text: '⧗ 复制时间戳' });
 		tsBtn.onclick = async () => {
 			const t = Math.floor(video.currentTime);
