@@ -10,6 +10,44 @@ export interface EmbeddedPlayerRef {
 	destroyed: boolean;
 	seek(t: number): void;
 	destroy?(): void;
+	/** 播放器所属 DOM 是否还在文档里（模式切换后旧渲染会被丢弃） */
+	isConnected?(): boolean;
+	scrollIntoView?(): void;
+}
+
+/** 时间戳链接 → 「▶ 03:24」可点击标签：不吞掉笔记内容，点击 seek 已打开的播放器或原地开卡 */
+function mountTimestampLink(plugin: BilibiliPlugin, anchor: HTMLElement, link: BiliLink): void {
+	const label = (anchor.textContent ?? '').trim() || fmtTime(link.t);
+	const span = document.createElement('span');
+	span.className = 'bili-embed-ts';
+	span.textContent = `▶ ${label}`;
+	span.title = `跳转到 ${fmtTime(link.t)}`;
+	anchor.replaceWith(span);
+	span.onclick = () => {
+		void handleTimestampClick(plugin, span, link);
+	};
+}
+
+async function handleTimestampClick(plugin: BilibiliPlugin, span: HTMLElement, link: BiliLink): Promise<void> {
+	let bvid = link.bvid;
+	if (!bvid && link.short) {
+		try {
+			bvid = (await plugin.api.resolveShort(link.short)).bvid;
+		} catch (e) {
+			console.warn('[bilibili-embed] 短链解析失败', e);
+			new Notice('短链解析失败');
+			return;
+		}
+	}
+	if (!bvid) return;
+	const ref = plugin.playersByBvid.get(bvid);
+	if (ref && !ref.destroyed && ref.isConnected?.() !== false) {
+		ref.seek(link.t);
+		ref.scrollIntoView?.();
+		return;
+	}
+	// 没有打开的播放器：原地挂卡，从该时间点开始播
+	void mountCard(plugin, span, { ...link, bvid });
 }
 
 export function mountEmbedProcessor(plugin: BilibiliPlugin) {
@@ -21,7 +59,12 @@ export function mountEmbedProcessor(plugin: BilibiliPlugin) {
 			const link = parseBiliUrl(href) ?? parseBiliUrl((a.textContent ?? '').trim());
 			if (!link) return;
 			anchor.dataset.biliEmbed = '1';
-			void mountCard(plugin, anchor, link);
+			if (link.t > 0) {
+				// 时间戳链接：保留在原地（变成可点击标签），点击跳转已打开的播放器
+				mountTimestampLink(plugin, anchor, link);
+			} else {
+				void mountCard(plugin, anchor, link);
+			}
 		});
 		// 网页剪藏进来的B站官方 iframe 嵌入（player.bilibili.com?bvid=xx）→ 换成我们的登录高清播放卡
 		el.querySelectorAll('iframe').forEach((f) => {
@@ -60,16 +103,6 @@ async function mountCard(plugin: BilibiliPlugin, anchor: HTMLElement, link: Bili
 	if (!link.bvid) {
 		fallbackIframe(wrap, link);
 		return;
-	}
-
-	// 时间戳链接：同一视频的播放器已打开 → 直接 seek，不再新开
-	if (link.t > 0) {
-		const existing = plugin.playersByBvid.get(link.bvid);
-		if (existing && !existing.destroyed) {
-			wrap.remove();
-			existing.seek(link.t);
-			return;
-		}
 	}
 
 	let info: VideoInfo;
@@ -184,6 +217,12 @@ class PlayerCard {
 			if (ok) new Notice(`已复制时间戳 ${fmtTime(t)}`);
 		};
 
+		// 同一视频旧播放卡（模式切换留下的游离 ref）先停掉，避免双引擎拉流
+		const old = this.plugin.playersByBvid.get(info.bvid);
+		if (old) {
+			old.destroyed = true;
+			old.destroy?.();
+		}
 		const ref: EmbeddedPlayerRef = {
 			destroyed: false,
 			seek(t: number) {
@@ -192,6 +231,8 @@ class PlayerCard {
 					void video.play().catch(() => {});
 				} catch {}
 			},
+			isConnected: () => video.isConnected,
+			scrollIntoView: () => box.scrollIntoView({ behavior: 'smooth', block: 'center' }),
 		};
 		this.plugin.playersByBvid.set(info.bvid, ref);
 

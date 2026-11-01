@@ -1,0 +1,1 @@
+(async () => { await new Promise(r => setTimeout(r, 1500)); const f = document.querySelector('.bili-embed-fallback'); const v = document.querySelector('.bili-embed-player video'); return {fallback: !!f, videoPlaying: v ? (!v.paused && v.videoWidth + 'x' + v.videoHeight) : null}; })()

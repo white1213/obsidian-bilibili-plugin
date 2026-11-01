@@ -113,6 +113,17 @@
 	border-radius: 8px;
 }
 
+/* 时间戳跳转标签 */
+.bili-embed-ts {
+	color: var(--link-color, #8a5cf5);
+	cursor: pointer;
+	font-size: 0.9em;
+	white-space: nowrap;
+}
+.bili-embed-ts:hover {
+	text-decoration: underline;
+}
+
 /* 降级提示条 */
 .bili-embed-fallback {
 	position: absolute;

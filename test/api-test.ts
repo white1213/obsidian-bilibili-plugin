@@ -2,8 +2,28 @@
 import { BilibiliClient } from '../src/bilibili/api';
 import { BiliCreds } from '../src/bilibili/types';
 import { md5 } from '../src/bilibili/md5';
+import { parseBiliUrl } from '../src/bilibili/url';
 import { parseSidx, parseTopBoxes } from '../src/player/sidx';
 import { HttpTransport } from '../src/net';
+
+/** URL 解析自检：重点覆盖「复制时间戳」生成的无 ? 形式 */
+function selfCheckParse(): void {
+	const cases: [string, string, number][] = [
+		['https://www.bilibili.com/video/BV1GJx167E6S&t=204', 'BV1GJx167E6S', 204],
+		['https://www.bilibili.com/video/BV1GJx167E6S/?spm_id_from=1&vd_source=2', 'BV1GJx167E6S', 0],
+		['BV1GJ411x7h7&t=35', 'BV1GJ411x7h7', 35],
+		['https://www.bilibili.com/video/BV1GJ411x7h7?t=35', 'BV1GJ411x7h7', 35],
+		['https://www.bilibili.com/video/BV1GJ411x7h7/#t=35', 'BV1GJ411x7h7', 35],
+		['https://www.bilibili.com/video/BV1GJ411x7h7?p=3&t=12', 'BV1GJ411x7h7', 12],
+	];
+	for (const [input, bvid, t] of cases) {
+		const got = parseBiliUrl(input);
+		if (!got || got.bvid !== bvid || got.t !== t) {
+			throw new Error(`URL解析自检失败: ${input} → ${JSON.stringify(got)}（期望 bvid=${bvid} t=${t}）`);
+		}
+	}
+	console.log('URL 解析自检通过（6 个用例）');
+}
 
 function selfCheckMd5(): void {
 	const vectors: [string, string][] = [
@@ -62,6 +82,7 @@ async function main(): Promise<void> {
 	});
 	const bv = process.argv[2] ?? 'BV1GJ411x7h7';
 	selfCheckMd5();
+	selfCheckParse();
 	console.log(`测试视频: ${bv}  登录态: ${creds.sessdata ? '有 SESSDATA' : '匿名'}`);
 
 	console.log('\n== 1. view 接口 ==');
